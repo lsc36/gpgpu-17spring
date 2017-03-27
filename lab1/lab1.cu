@@ -8,7 +8,7 @@
 
 namespace {
 
-const unsigned W = 640, H = 480, FPS = 24;
+const unsigned W = 1280, H = 720, FPS = 24;
 const char *AUDIO_FILE = "audio.wav";
 const unsigned SAMPLE_RATE = 44100, CHANNELS = 2;
 const unsigned WINDOW_SIZE = SAMPLE_RATE / FPS;
@@ -27,7 +27,16 @@ __global__ void GetAudioWindow(const float *audio, unsigned offset,
 	window[x] = (audio[offset + 2*x] + audio[offset + 2*x + 1]) / 2;
 }
 
-__global__ void GenerateFrame(const float *window, uint8_t *yuv) {
+__device__ int myabs(int x) {
+	return x < 0 ? -x : x;
+}
+
+__device__ uint8_t clip(int x) {
+	return x > 255 ? 255 : x < 0 ? 0 : x;
+}
+
+__global__ void GenerateFrame(const float *window, unsigned curFrame,
+		uint8_t *yuv) {
 	const unsigned x = blockIdx.x * blockDim.x + threadIdx.x;
 	const unsigned y = blockIdx.y * blockDim.y + threadIdx.y;
 	if (!(x < W && y < H))
@@ -37,11 +46,12 @@ __global__ void GenerateFrame(const float *window, uint8_t *yuv) {
 	if (abs(window[off] - (2.0 * y / (H-1) - 1)) < 0.02)
 		yuv[y*W + x] = 255;
 	else
-		yuv[y*W + x] = 0;
+		yuv[y*W + x] = 153;
 
 	if (x % 2 == 0 && y % 2 == 0) {
-		yuv[W*H + (y/2)*(W/2) + x/2] = 128;
-		yuv[W*H + (W/2)*(H/2) + (y/2)*(W/2) + x/2] = 128;
+		yuv[W*H + (y/2)*(W/2) + x/2] = 221;
+		yuv[W*H + (W/2)*(H/2) + (y/2)*(W/2) + x/2] =
+			clip(256 - myabs((curFrame + x + y/2) % 512 - 256));
 	}
 }
 
@@ -98,7 +108,8 @@ void Lab1VideoGenerator::Impl::Generate(uint8_t *yuv) {
 			m_windowMem.get_gpu_wo());
 	kernel::GenerateFrame<<<
 		dim3((W - 1)/BLOCKDIM_X + 1, (H - 1)/BLOCKDIM_Y + 1),
-		dim3(BLOCKDIM_X, BLOCKDIM_Y)>>>(m_windowMem.get_gpu_ro(), yuv);
+		dim3(BLOCKDIM_X, BLOCKDIM_Y)>>>(m_windowMem.get_gpu_ro(),
+				m_curFrame, yuv);
 	m_curFrame++;
 }
 
