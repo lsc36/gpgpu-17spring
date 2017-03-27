@@ -24,7 +24,8 @@ __global__ void GetAudioWindow(const float *audio, unsigned offset,
 	if (!(x < WINDOW_SIZE))
 		return;
 
-	window[x] = (audio[offset + 2*x] + audio[offset + 2*x + 1]) / 2;
+	window[x] = audio[offset + 2*x];
+	window[WINDOW_SIZE + x] = audio[offset + 2*x + 1];
 }
 
 __device__ int myabs(int x) {
@@ -42,8 +43,8 @@ __global__ void GenerateFrame(const float *window, unsigned curFrame,
 	if (!(x < W && y < H))
 		return;
 
-	size_t off = x * WINDOW_SIZE / W;
-	if (abs(window[off] - (2.0 * y / (H-1) - 1)) < 0.02)
+	size_t off = x * WINDOW_SIZE / W + (y >= H/2) * WINDOW_SIZE;
+	if (abs(window[off] - (2.0 * (y % (H/2)) / (H/2 - 1) - 1)) < 0.02)
 		yuv[y*W + x] = 255;
 	else
 		yuv[y*W + x] = 153;
@@ -80,9 +81,9 @@ Lab1VideoGenerator::Impl::Impl() {
 			m_numFrames, m_numFrames / FPS / 60,
 			m_numFrames / FPS % 60, m_numFrames % FPS);
 
-	m_buffer.Realloc(sfinfo.frames * sfinfo.channels + WINDOW_SIZE);
+	m_buffer.Realloc(sfinfo.frames * CHANNELS + WINDOW_SIZE * CHANNELS);
 	m_audioMem = m_buffer.CreateSync(sfinfo.frames * CHANNELS);
-	m_windowMem = m_buffer.CreateSync(WINDOW_SIZE,
+	m_windowMem = m_buffer.CreateSync(WINDOW_SIZE * CHANNELS,
 			sfinfo.frames * CHANNELS);
 
 	assert(sf_readf_float(sndfile, m_audioMem.get_cpu_wo(), sfinfo.frames)
