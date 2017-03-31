@@ -13,7 +13,7 @@ const char *AUDIO_FILE = "audio.wav";
 const unsigned SAMPLE_RATE = 44100, CHANNELS = 2;
 const unsigned WINDOW_SIZE = SAMPLE_RATE / FPS;
 const unsigned WAVE_POINT_BUFSIZE = W * CHANNELS / 2;
-const float SPEED = 5.0;
+const float SPEED = 4.0;
 const float PI = acos(-1);
 const unsigned BLOCKDIM_X = 32, BLOCKDIM_Y = 24;
 
@@ -72,20 +72,20 @@ __global__ void GenerateFrame(unsigned curFrame, const float *wavePoint,
 
 		float dist = abs(sqrt((x-px)*(x-px) + (y-py)*(y-py)) - sqrt(r*r));
 		if (dist <= SPEED)
-			p += pp * (1 - dist / SPEED);
+			p += pp * (1 - dist / SPEED) * exp(-r * 6.0 / W);
 	}
-	yuv[y*W + x] = clip(32 + 192 * p);
+	yuv[y*W + x] = clip(64 + 600 * p);
 
 	if (x % 2 == 0 && y % 2 == 0) {
-		yuv[W*H + (y/2)*(W/2) + x/2] = 221;
+		yuv[W*H + (y/2)*(W/2) + x/2] = 0;
 		yuv[W*H + (W/2)*(H/2) + (y/2)*(W/2) + x/2] =
-			clip(48 + 160 - myabs((curFrame + x + y/2) % 320 - 160));
+			clip(96 + 128 - myabs((curFrame + x + y/2) % 256 - 128));
 	}
 }
 
 }  // namespace kernel
 
-class Lab1VideoGenerator::Impl {
+struct Lab1VideoGenerator::Impl {
 public:
 	Impl();
 	void get_info(Lab1VideoInfo&);
@@ -150,7 +150,7 @@ void Lab1VideoGenerator::Impl::Generate(uint8_t *yuv) {
 	offset = 4 * (m_curFrame * CHANNELS % WAVE_POINT_BUFSIZE);
 	for (unsigned c = 0; c < CHANNELS; c++) {
 		wavePoint[offset + 4*c] =
-			W / 2 - cos(m_curFrame / 100.0 + c * PI) * W / 4;
+			W / 2 - cos(m_curFrame / 100.0 + c * PI) * H / 4;
 		wavePoint[offset + 4*c + 1] =
 			H / 2 + sin(m_curFrame / 100.0 + c * PI) * H / 4;
 		wavePoint[offset + 4*c + 2] = sqrt(windowSum[c] / WINDOW_SIZE);

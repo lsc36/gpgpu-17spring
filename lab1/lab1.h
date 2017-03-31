@@ -9,7 +9,7 @@ struct Lab1VideoInfo {
 };
 
 class Lab1VideoGenerator {
-	class Impl;
+	struct Impl;
 	unique_ptr<Impl> impl;
 public:
 	Lab1VideoGenerator();
