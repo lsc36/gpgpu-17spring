@@ -102,7 +102,8 @@ __global__ void MySegmentedScanStep1(const char *text, int *pos, int text_size)
     MySegmentedScanInit(text, pos2, text_size);
     MySegmentedScanIntraBlock(pos2);
 
-    pos[512 * bid + tid] = pos2[tid];
+    const int i = 512 * bid + tid;
+    if (i < text_size) pos[i] = pos2[tid];
 }
 
 __global__ void MySegmentedScanStep2(int *pos)
@@ -114,15 +115,10 @@ __global__ void MySegmentedScanStep2(int *pos)
 
 void CountPosition2(const char *text, int *pos, int text_size)
 {
-    int *pos2 = nullptr;
     const int size = CeilAlign(text_size, 512);
-    cudaMalloc(&pos2, size * sizeof(int));
 
-    MySegmentedScanStep1<<<size / 512, 512, 512 * sizeof(int)>>>(text, pos2,
+    MySegmentedScanStep1<<<size / 512, 512, 512 * sizeof(int)>>>(text, pos,
                                                                  text_size);
     cudaDeviceSynchronize();
-    MySegmentedScanStep2<<<size / 512 - 1, 512>>>(pos2);
-
-    cudaMemcpy(pos, pos2, text_size * sizeof(int), cudaMemcpyDeviceToDevice);
-    cudaFree(pos2);
+    MySegmentedScanStep2<<<size / 512 - 1, 512>>>(pos);
 }
