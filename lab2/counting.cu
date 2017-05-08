@@ -33,81 +33,76 @@ void CountPosition1(const char *text, int *pos, int text_size)
 
 __device__ void MySegmentedScanInit(const char *text, int *pos, int text_size)
 {
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x, tid = threadIdx.x;
 
     if (i < text_size)
-        pos[i] = text[i] == '\n' ? 0 : 1;
+        pos[tid] = text[i] == '\n' ? 0 : 1;
     else
-        pos[i] = 0;
+        pos[tid] = 0;
 
     __syncthreads();
 }
 
+__device__ void MySegmentedScanIntraWarp(int *pos)
+{
+    const int lane = threadIdx.x & 31;
+
+    if (lane >=  1) pos[lane] += pos[lane -  1] * (pos[lane] & 1);
+    if (lane >=  2) pos[lane] += pos[lane -  2] * ((pos[lane] >> 1) & 1);
+    if (lane >=  4) pos[lane] += pos[lane -  4] * ((pos[lane] >> 2) & 1);
+    if (lane >=  8) pos[lane] += pos[lane -  8] * ((pos[lane] >> 3) & 1);
+    if (lane >= 16) pos[lane] += pos[lane - 16] * ((pos[lane] >> 4) & 1);
+}
+
+__device__ void MySegmentedScanMergeWarps(int *pos, int level)
+{
+    const int lane = threadIdx.x & 31;
+    int tmp = pos[lane];
+
+    if (tmp == (32 << level) - 32 + lane + 1)
+        tmp += pos[-(32 << level) + 31];
+    __syncthreads();
+
+    pos[lane] = tmp;
+}
+
 __device__ void MySegmentedScanIntraBlock(int *pos)
 {
-    const int tid = threadIdx.x;
-    int tmp;
+    const int wid = threadIdx.x >> 5;
+    const int offset = wid << 5;
 
-    if (tid >=   1) {
-	tmp = pos[tid -   1]; __syncthreads();
-	if (pos[tid] ==   1) pos[tid] += tmp;
-    }
+    MySegmentedScanIntraWarp(pos + offset);
     __syncthreads();
-    if (tid >=   2) {
-	tmp = pos[tid -   2]; __syncthreads();
-	if (pos[tid] ==   2) pos[tid] += tmp;
-    }
+
+    if (wid >= 1) MySegmentedScanMergeWarps(pos + offset, 0);
     __syncthreads();
-    if (tid >=   4) {
-	tmp = pos[tid -   4]; __syncthreads();
-	if (pos[tid] ==   4) pos[tid] += tmp;
-    }
+    if (wid >= 2) MySegmentedScanMergeWarps(pos + offset, 1);
     __syncthreads();
-    if (tid >=   8) {
-	tmp = pos[tid -   8]; __syncthreads();
-	if (pos[tid] ==   8) pos[tid] += tmp;
-    }
+    if (wid >= 4) MySegmentedScanMergeWarps(pos + offset, 2);
     __syncthreads();
-    if (tid >=  16) {
-	tmp = pos[tid -  16]; __syncthreads();
-	if (pos[tid] ==  16) pos[tid] += tmp;
-    }
-    __syncthreads();
-    if (tid >=  32) {
-	tmp = pos[tid -  32]; __syncthreads();
-	if (pos[tid] ==  32) pos[tid] += tmp;
-    }
-    __syncthreads();
-    if (tid >=  64) {
-	tmp = pos[tid -  64]; __syncthreads();
-	if (pos[tid] ==  64) pos[tid] += tmp;
-    }
-    __syncthreads();
-    if (tid >= 128) {
-	tmp = pos[tid - 128]; __syncthreads();
-	if (pos[tid] == 128) pos[tid] += tmp;
-    }
-    __syncthreads();
-    if (tid >= 256) {
-	tmp = pos[tid - 256]; __syncthreads();
-	if (pos[tid] == 256) pos[tid] += tmp;
-    }
+    if (wid >= 8) MySegmentedScanMergeWarps(pos + offset, 3);
     __syncthreads();
 }
 
 __device__ void MySegmentedScanMergeBlocks(int *pos)
 {
     const int tid = threadIdx.x;
+    int tmp = pos[tid];
 
-    if (pos[tid] == tid + 1) pos[tid] += pos[-1];
+    if (tmp == tid + 1) tmp += pos[-1];
+
+    pos[tid] = tmp;
 }
 
 __global__ void MySegmentedScanStep1(const char *text, int *pos, int text_size)
 {
-    const int bid = blockIdx.x;
+    const int bid = blockIdx.x, tid = threadIdx.x;
+    __shared__ int pos2[512];
 
-    MySegmentedScanInit(text, pos, text_size);
-    MySegmentedScanIntraBlock(pos + 512 * bid);
+    MySegmentedScanInit(text, pos2, text_size);
+    MySegmentedScanIntraBlock(pos2);
+
+    pos[512 * bid + tid] = pos2[tid];
 }
 
 __global__ void MySegmentedScanStep2(int *pos)
@@ -123,7 +118,8 @@ void CountPosition2(const char *text, int *pos, int text_size)
     const int size = CeilAlign(text_size, 512);
     cudaMalloc(&pos2, size * sizeof(int));
 
-    MySegmentedScanStep1<<<size / 512, 512>>>(text, pos2, text_size);
+    MySegmentedScanStep1<<<size / 512, 512, 512 * sizeof(int)>>>(text, pos2,
+                                                                 text_size);
     cudaDeviceSynchronize();
     MySegmentedScanStep2<<<size / 512 - 1, 512>>>(pos2);
 
