@@ -24,6 +24,8 @@ __global__ void SimpleClone(const float *background, const float *target,
     }
 }
 
+const dim3 BS(32, 16);
+
 void PoissonImageCloning(const float *background, const float *target,
                          const float *mask, float *output,
                          const int wb, const int hb,
@@ -32,7 +34,7 @@ void PoissonImageCloning(const float *background, const float *target,
 {
     cudaMemcpy(output, background, wb * hb * sizeof(float) * 3,
                cudaMemcpyDeviceToDevice);
-    SimpleClone<<<dim3(CeilDiv(wt, 32), CeilDiv(ht, 16)), dim3(32, 16)>>>(
+    SimpleClone<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
         background, target, mask, output,
         wb, hb, wt, ht, oy, ox
     );
