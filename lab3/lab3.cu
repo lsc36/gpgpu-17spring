@@ -70,9 +70,9 @@ __global__ void CalcAB(const float *background, const float *target,
     DoNeighbor1(yb < hb - 1, yt < ht - 1,  wb,  wt, 6);
 
     A[curt] = a;
-    B[curt * 3 + 0] = b0;
-    B[curt * 3 + 1] = b1;
-    B[curt * 3 + 2] = b2;
+    B[curt] = b0;
+    B[curt + wt * ht] = b1;
+    B[curt + wt * ht * 2] = b2;
 }
 
 __global__ void JacobiIteration(const unsigned *A, const float *B,
@@ -90,23 +90,42 @@ __global__ void JacobiIteration(const unsigned *A, const float *B,
         return;
 
     unsigned a = A[curt];
-    float ax0 = 0, ax1 = 0, ax2 = 0;
+    float ax = 0.0;
 
-#define DoNeighbor2(diffb, b_off)               \
-    if (a & (1 << b_off)) {                     \
-        ax0 -= output[(curb + diffb) * 3 + 0];  \
-        ax1 -= output[(curb + diffb) * 3 + 1];  \
-        ax2 -= output[(curb + diffb) * 3 + 2];  \
-    }
+    if (a & (1 << 3)) ax -= output[curb - 1];
+    if (a & (1 << 4)) ax -= output[curb + 1];
+    if (a & (1 << 5)) ax -= output[curb - wb];
+    if (a & (1 << 6)) ax -= output[curb + wb];
 
-    DoNeighbor2( -1, 3);
-    DoNeighbor2(  1, 4);
-    DoNeighbor2(-wb, 5);
-    DoNeighbor2( wb, 6);
+    output[curb] = (B[curt] - ax) / (a & 0x7);
+}
 
-    output[curb * 3 + 0] = (B[curt * 3 + 0] - ax0) / (a & 0x7);
-    output[curb * 3 + 1] = (B[curt * 3 + 1] - ax1) / (a & 0x7);
-    output[curb * 3 + 2] = (B[curt * 3 + 2] - ax2) / (a & 0x7);
+template <typename T>
+__global__ void Reshape1(const T *input, T *output, const int w, const int h)
+{
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (!(y < h && x < w))
+        return;
+
+    const int cur = w * y + x;
+    output[cur] = input[cur * 3];
+    output[cur + w * h] = input[cur * 3 + 1];
+    output[cur + w * h * 2] = input[cur * 3 + 2];
+}
+
+template <typename T>
+__global__ void Reshape2(const T *input, T *output, const int w, const int h)
+{
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    if (!(y < h && x < w))
+        return;
+
+    const int cur = w * y + x;
+    output[cur * 3] = input[cur];
+    output[cur * 3 + 1] = input[cur + w * h];
+    output[cur * 3 + 2] = input[cur + w * h * 2];
 }
 
 const dim3 BS(32, 16);
@@ -119,30 +138,42 @@ void PoissonImageCloning(const float *background, const float *target,
                          const int oy, const int ox)
 {
     unsigned *A = nullptr;
-    float *B = nullptr;
+    float *B = nullptr, *buf = nullptr;
     cudaMalloc(&A, wt * ht * sizeof(unsigned));
     cudaMalloc(&B, wt * ht * sizeof(float) * 3);
+    cudaMalloc(&buf, wb * hb * sizeof(float) * 3);
 
     CalcAB<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
         background, target, mask, A, B,
         wb, hb, wt, ht, oy, ox
     );
 
-    cudaMemcpy(output, background, wb * hb * sizeof(float) * 3,
-               cudaMemcpyDeviceToDevice);
-    SimpleClone<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
-        background, target, mask, output,
-        wb, hb, wt, ht, oy, ox
+    Reshape1<<<dim3(CeilDiv(wb, BS.x), CeilDiv(hb, BS.y)), BS>>>(
+        background, buf, wb, hb
     );
 
     for (int i = 0; i < ITER; i++) {
         cudaDeviceSynchronize();
         JacobiIteration<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
-            A, B, mask, output,
+            A, B, mask, buf,
+            wb, hb, wt, ht, oy, ox
+        );
+        JacobiIteration<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
+            A, B + wt * ht, mask, buf + wb * hb,
+            wb, hb, wt, ht, oy, ox
+        );
+        JacobiIteration<<<dim3(CeilDiv(wt, BS.x), CeilDiv(ht, BS.y)), BS>>>(
+            A, B + wt * ht * 2, mask, buf + wb * hb * 2,
             wb, hb, wt, ht, oy, ox
         );
     }
 
+    cudaDeviceSynchronize();
+    Reshape2<<<dim3(CeilDiv(wb, BS.x), CeilDiv(hb, BS.y)), BS>>>(
+        buf, output, wb, hb
+    );
+
     cudaFree(A);
     cudaFree(B);
+    cudaFree(buf);
 }
